@@ -48,6 +48,9 @@ func NewClient(ctx context.Context, clientID string, dbPath string) (*Client, er
 	// Create whatsmeow client
 	clientLog := waLog.Stdout("Client", "INFO", true)
 	waClient := whatsmeow.NewClient(deviceStore, clientLog)
+	
+	// CRITICAL: Enable emitting AppState events during full sync to get existing labels
+	waClient.EmitAppStateEventsOnFullSync = true
 
 	client := &Client{
 		WAClient:  waClient,

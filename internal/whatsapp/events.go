@@ -258,6 +258,25 @@ func (m *Manager) handleEvent(clientID string, client *Client, evt interface{}) 
 	case *events.AppState:
 		// App state sync - trigger label sync for leads client
 		fmt.Printf("📱 [%s] AppState sync received, labels may be updated\n", clientID)
+		
+		// Manual parsing of mutations as requested
+		if v.SyncActionValue != nil {
+			// SyncActionValue represents the value of the action directly
+			
+			// Try to get LabelEditAction
+			if labelEdit := v.SyncActionValue.GetLabelEditAction(); labelEdit != nil {
+				name := labelEdit.GetName()
+				if name != "" {
+					fmt.Printf("🏷️ [%s] Manual Parse: Label Edit found: Name=%s\n", clientID, name)
+				}
+			}
+			
+			// Try to get LabelAssociationAction
+			if labelAssoc := v.SyncActionValue.GetLabelAssociationAction(); labelAssoc != nil {
+				labeled := labelAssoc.GetLabeled()
+				fmt.Printf("🏷️ [%s] Manual Parse: Label Association found: Labeled=%v\n", clientID, labeled)
+			}
+		}
 
 	case *events.LabelEdit:
 		// Track label definitions
