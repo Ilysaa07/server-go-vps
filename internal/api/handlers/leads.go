@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"go.mau.fi/whatsmeow/appstate"
+	"go.mau.fi/whatsmeow/types"
 )
 
 // SyncContacts handles POST /sync-contacts
@@ -92,29 +94,61 @@ func (h *Handler) SyncContacts(c *gin.Context) {
 	fmt.Printf("🏷️ Available labels in store: %v\n", allLabels)
 	fmt.Printf("🏷️ JIDs with '%s' label: %d\n", targetLabel, len(labeledJIDs))
 
-	// Filter contacts by label
-	filtered := len(labeledSet) > 0
 	result := make([]map[string]interface{}, 0)
+	filtered := len(labeledSet) > 0 // Define filtered for use in response
 	
-	for jid, contact := range contacts {
-		// Skip if we have labels but this contact doesn't have the target label
-		if filtered && !labeledSet[jid.User] {
-			continue
-		}
+	// Better filtering strategy:
+	if filtered {
+		// STRATEGY A: If we have labeled leads, iterate through THEM
+		fmt.Printf("🏷️ Filtering mode: Iterating through %d labeled JIDs\n", len(labeledJIDs))
 		
-		if contact.FullName == "" && contact.PushName == "" {
-			continue
+		for _, targetJID := range labeledJIDs {
+			// Construct JID object
+			jid, _ := types.ParseJID(targetJID + "@s.whatsapp.net") // adjust suffix if needed
+			
+			// Try to find contact info
+			contact, err := client.WAClient.Store.Contacts.GetContact(ctx, jid)
+			
+			name := targetJID // Default to number
+			if err == nil && contact.Found {
+				if contact.FullName != "" {
+					name = contact.FullName
+				} else if contact.PushName != "" {
+					name = contact.PushName
+				}
+			}
+			
+			// Formatted number
+			formattedID := strings.Replace(targetJID, "@s.whatsapp.net", "", -1)
+
+			result = append(result, map[string]interface{}{
+				"id":   formattedID,
+				"name": name,
+				"type": "user",
+			})
 		}
-		name := contact.FullName
-		if name == "" {
-			name = contact.PushName
-		}
+	} else {
+		// STRATEGY B: Fallback to iterating all contacts if no label found (or filtering disabled)
+		fmt.Printf("🏷️ Filtering mode: Iterating through all %d contacts\n", len(contacts))
 		
-		result = append(result, map[string]interface{}{
-			"id":    jid.User,
-			"name":  name,
-			"phone": jid.User,
-		})
+		for jid, contact := range contacts {
+			if contact.FullName == "" && contact.PushName == "" {
+				continue
+			}
+			name := contact.FullName
+			if name == "" {
+				name = contact.PushName
+			}
+
+			// Clean up ID
+			formattedID := strings.Replace(jid.User, "@s.whatsapp.net", "", -1)
+
+			result = append(result, map[string]interface{}{
+				"id":   formattedID,
+				"name": name,
+				"type": "user",
+			})
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
