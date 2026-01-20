@@ -131,18 +131,36 @@ func (h *Handler) SyncContacts(c *gin.Context) {
 				fmt.Printf("🏷️ Found LID: %s\n", jid)
 				fmt.Printf("   Contact Info: %+v\n", contact)
 				
-				// Introspect first few contacts to see if we can find a link
-				// This is temporary debugging to solve the LID issue
-				
-				all, _ := client.WAClient.Store.Contacts.GetAllContacts(ctx)
-				count := 0
-				for k, v := range all {
-					if count < 3 {
-						fmt.Printf("   Sample Contact [%s]: %+v\n", k, v)
-						count++
-					} else {
-						break
+				// Resolve LID to Phone JID via Server Query
+				// Since we can't find a direct local map, let's ask WhatsApp
+				resp, err := client.WAClient.GetUserInfo(ctx, []types.JID{jid})
+				if err == nil {
+					if info, ok := resp[jid]; ok {
+						fmt.Printf("   ✅ GetUserInfo for LID %s: %+v\n", jid, info)
+						
+						// Often the UserInfo object itself is keyed by the requested JID (LID)
+						// But potentially we can find the Phone number in the Devices list?
+						// Or maybe the 'PictureID' isn't helpful.
+						
+						// Strategy C: If we have devices, maybe one of them is the phone?
+						for _, deviceB := range info.Devices {
+							if deviceB.Server == "s.whatsapp.net" {
+								fmt.Printf("   🔗 Found Phone JID in Devices: %s\n", deviceB)
+								displayID = deviceB.User
+								// Also update name from this contact if possible
+								if phContact, err := client.WAClient.Store.Contacts.GetContact(ctx, deviceB); err == nil && phContact.Found {
+									if phContact.FullName != "" {
+										name = phContact.FullName
+									} else {
+										name = phContact.PushName
+									}
+								}
+								break
+							}
+						}
 					}
+				} else {
+					fmt.Printf("   ❌ GetUserInfo failed for LID %s: %v\n", jid, err)
 				}
 				
 			} else {
