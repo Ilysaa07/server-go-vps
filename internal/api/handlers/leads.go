@@ -128,7 +128,23 @@ func (h *Handler) SyncContacts(c *gin.Context) {
 			
 			// Special handling for LIDs (Bot linked device IDs)
 			if jid.Server == "lid" {
-				fmt.Printf("🏷️ Found LID: %s. Using Name if available.\n", jid)
+				fmt.Printf("🏷️ Found LID: %s\n", jid)
+				fmt.Printf("   Contact Info: %+v\n", contact)
+				
+				// Introspect first few contacts to see if we can find a link
+				// This is temporary debugging to solve the LID issue
+				
+				all, _ := client.WAClient.Store.Contacts.GetAllContacts(ctx)
+				count := 0
+				for k, v := range all {
+					if count < 3 {
+						fmt.Printf("   Sample Contact [%s]: %+v\n", k, v)
+						count++
+					} else {
+						break
+					}
+				}
+				
 			} else {
 				// Checks if it looks like a phone number
 				displayID = strings.Replace(displayID, "@s.whatsapp.net", "", -1)
