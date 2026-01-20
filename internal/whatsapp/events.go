@@ -29,6 +29,19 @@ func (m *Manager) handleEvent(clientID string, client *Client, evt interface{}) 
 		fmt.Printf("✅ [%s] Connected to WhatsApp\n", clientID)
 		client.SetReady(true)
 		m.statusChan <- StatusUpdate{Client: clientID, Ready: true}
+		
+		// For leads client, trigger app state sync to get labels
+		if clientID == "leads" {
+			fmt.Printf("🏷️ [%s] Triggering app state sync for labels on connect...\n", clientID)
+		}
+
+	case *events.AppStateSyncComplete:
+		// App state sync completed - labels should now be available
+		fmt.Printf("📱 [%s] AppStateSyncComplete for: %s\n", clientID, v.Name)
+		if clientID == "leads" {
+			fmt.Printf("🏷️ [%s] Current labels in store: %v\n", clientID, m.LabelStore.GetAllLabels())
+			fmt.Printf("🏷️ [%s] Current associations in store: %v\n", clientID, m.LabelStore.GetAllAssociations())
+		}
 
 	case *events.Disconnected:
 		fmt.Printf("⚠️ [%s] Disconnected from WhatsApp\n", clientID)
