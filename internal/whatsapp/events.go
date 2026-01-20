@@ -244,30 +244,41 @@ func (m *Manager) handleEvent(clientID string, client *Client, evt interface{}) 
 
 	case *events.AppState:
 		// App state sync - trigger label sync for leads client
-		if clientID == "leads" {
-			fmt.Printf("📱 [%s] AppState sync received, labels may be updated\n", clientID)
-		}
+		fmt.Printf("📱 [%s] AppState sync received, labels may be updated\n", clientID)
 
 	case *events.LabelEdit:
-		// Track label definitions (only for leads client)
-		if clientID == "leads" && v.Action != nil {
+		// Track label definitions
+		fmt.Printf("🏷️ [%s] LabelEdit event received! LabelID=%s, Action=%+v, FromFullSync=%v\n", 
+			clientID, v.LabelID, v.Action, v.FromFullSync)
+		if v.Action != nil {
 			name := v.Action.GetName()
+			color := v.Action.GetColor()
+			fmt.Printf("🏷️ [%s] Label details: Name=%s, Color=%d\n", clientID, name, color)
 			if name != "" {
 				m.LabelStore.SetLabel(v.LabelID, name)
-				fmt.Printf("🏷️ [%s] Label updated: ID=%s, Name=%s\n", clientID, v.LabelID, name)
 			}
 		}
 
 	case *events.LabelAssociationChat:
-		// Track which contacts have which labels (only for leads client)
+		// Track which contacts have which labels
+		fmt.Printf("🏷️ [%s] LabelAssociationChat event received! LabelID=%s, JID=%s, Action=%+v\n", 
+			clientID, v.LabelID, v.JID.String(), v.Action)
+		jid := v.JID.User
+		if v.Action != nil && v.Action.GetLabeled() {
+			m.LabelStore.AddAssociation(v.LabelID, jid)
+			fmt.Printf("🏷️ [%s] Label %s ADDED to contact %s\n", clientID, v.LabelID, jid)
+		} else {
+			m.LabelStore.RemoveAssociation(v.LabelID, jid)
+			fmt.Printf("🏷️ [%s] Label %s REMOVED from contact %s\n", clientID, v.LabelID, jid)
+		}
+
+	default:
+		// Log unknown events for leads client to debug what we're receiving
 		if clientID == "leads" {
-			jid := v.JID.User
-			if v.Action != nil && v.Action.GetLabeled() {
-				m.LabelStore.AddAssociation(v.LabelID, jid)
-				fmt.Printf("🏷️ [%s] Label %s added to contact %s\n", clientID, v.LabelID, jid)
-			} else {
-				m.LabelStore.RemoveAssociation(v.LabelID, jid)
-				fmt.Printf("🏷️ [%s] Label %s removed from contact %s\n", clientID, v.LabelID, jid)
+			// Only log certain types to avoid spam
+			switch evt.(type) {
+			case *events.OfflineSyncPreview, *events.OfflineSyncCompleted:
+				fmt.Printf("📥 [%s] Sync event: %T\n", clientID, evt)
 			}
 		}
 	}
