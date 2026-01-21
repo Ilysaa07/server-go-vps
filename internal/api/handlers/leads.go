@@ -608,14 +608,15 @@ func (h *Handler) SyncContactsStream(c *gin.Context) {
 	// Process results in main thread (safe for c.Writer)
 	picCount := 0
 	for res := range results {
-		// Lookup the resolved ID to update the correct row on frontend
-		mappedID := res.ID
+		// Lookup the resolved ID to see if we have a phone number mapping
+		resolvedPhone := ""
 		if resolved, ok := lidToResolvedID[res.ID]; ok {
-			mappedID = resolved
+			resolvedPhone = resolved
 		}
 
 		sendEvent("contact-update", gin.H{
-			"id":            mappedID,
+			"id":            res.ID,        // Original LID (Key)
+			"phone":         resolvedPhone, // New Phone Number
 			"profilePicUrl": res.URL,
 		})
 		picCount++
