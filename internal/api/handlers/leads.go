@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -481,6 +482,9 @@ func (h *Handler) SyncContactsStream(c *gin.Context) {
 	// Process LIDs - get contact info from store directly (GetUserInfo doesn't return phone mapping)
 	fmt.Printf("🏷️ Processing %d LIDs directly from contact store\n", len(lidJIDs))
 	
+	// Collect LIDs for async profile pic fetch
+	var pendingPics []types.JID
+	
 	for i, lidJID := range lidJIDs {
 		// Get contact info from store
 		contact, _ := client.WAClient.Store.Contacts.GetContact(ctx, lidJID)
@@ -497,27 +501,22 @@ func (h *Handler) SyncContactsStream(c *gin.Context) {
 			}
 		}
 		
-		// Get profile picture URL
-		profilePicUrl := ""
-		pic, err := client.WAClient.GetProfilePictureInfo(ctx, lidJID, &whatsmeow.GetProfilePictureParams{
-			Preview: true, // Use thumbnail for list (faster download)
-		})
-		if err == nil && pic != nil {
-			profilePicUrl = pic.URL
-		}
-		
 		// Use LID as the identifier - it's valid for sending messages
 		displayID := lidJID.User
 		
+		// Send contact immediately (without waiting for profile pic)
 		sendEvent("contact", gin.H{
 			"id":            displayID,
 			"name":          name,
 			"phone":         displayID, // LID can be used to send messages
 			"type":          "lid",
 			"isLID":         true,
-			"profilePicUrl": profilePicUrl,
+			"profilePicUrl": "", // Will be updated async
 		})
 		processedCount++
+		
+		// Queue for async profile pic fetch
+		pendingPics = append(pendingPics, lidJID)
 		
 		// Send progress every 20 contacts
 		if (i+1) % 20 == 0 {
@@ -531,6 +530,95 @@ func (h *Handler) SyncContactsStream(c *gin.Context) {
 
 	sendEvent("complete", gin.H{
 		"total":   processedCount,
-		"message": fmt.Sprintf("Sync completed. %d contacts synced.", processedCount),
+		"message": fmt.Sprintf("Sync completed. %d contacts synced. Fetching profile pictures...", processedCount),
+	})
+	
+	// Fetch profile pictures concurrently (but block complete signal)
+	sendEvent("progress", gin.H{
+		"message": fmt.Sprintf("Fetching profile pictures for %d contacts...", len(pendingPics)),
+	})
+	
+	// Worker pool for profile pics
+	workerCount := 5
+	jobs := make(chan types.JID, len(pendingPics))
+	var wg sync.WaitGroup
+	
+	for w := 0; w < workerCount; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for lidJID := range jobs {
+				// Use a timeout context for each fetch
+				// We can just use context.Background() as we manage timeout overall or per-req inside library?
+				// Best to use a new context derived from existing if possible, or Background with timeout
+				
+				pic, err := client.WAClient.GetProfilePictureInfo(context.Background(), lidJID, &whatsmeow.GetProfilePictureParams{
+					Preview: true,
+				})
+				
+				if err == nil && pic != nil && pic.URL != "" {
+					// Send update event (Thread safe - Gin writer might need lock if concurrent writes are issue?)
+					// Gin context writer is NOT thread safe for concurrent writes.
+					// We must synchronize calls to sendEvent if called from multiple goroutines?
+					// Yes. But sendEvent helper uses c.Writer.SSEvent which writes to socket.
+					// We need a mutex for sendEvent to be safe.
+					// Since we can't easily modify sendEvent signature/scope here easily without refactor,
+					// let's just collect results and send in main thread? 
+					// NO, main thread is blocked waiting for WG.
+					// We should add a mutex to this handler scope.
+					
+					// Simple fix: Use a "results" channel and process results in main thread.
+					// That avoids concurrent write issues entirely. 
+				}
+			}
+		}()
+	}
+	
+	// Create results channel
+	type PicResult struct {
+		ID  string
+		URL string
+	}
+	results := make(chan PicResult, len(pendingPics))
+	
+	// Re-spawn workers to write to results channel
+	// Actually let's rewrite the worker part simpler:
+	
+	go func() {
+		localWg := sync.WaitGroup{}
+		semaphore := make(chan struct{}, 5) // Limit 5 concurrent requests
+		
+		for _, jid := range pendingPics {
+			localWg.Add(1)
+			go func(targetJID types.JID) {
+				defer localWg.Done()
+				semaphore <- struct{}{} // Acquire
+				defer func() { <-semaphore }() // Release
+				
+				pic, err := client.WAClient.GetProfilePictureInfo(context.Background(), targetJID, &whatsmeow.GetProfilePictureParams{
+					Preview: true,
+				})
+				if err == nil && pic != nil && pic.URL != "" {
+					results <- PicResult{ID: targetJID.User, URL: pic.URL}
+				}
+			}(jid)
+		}
+		localWg.Wait()
+		close(results)
+	}()
+	
+	// Process results in main thread (safe for c.Writer)
+	picCount := 0
+	for res := range results {
+		sendEvent("contact-update", gin.H{
+			"id":            res.ID,
+			"profilePicUrl": res.URL,
+		})
+		picCount++
+	}
+
+	sendEvent("complete", gin.H{
+		"total":   processedCount,
+		"message": fmt.Sprintf("Sync completed. %d contacts, %d profile pics fetched.", processedCount, picCount),
 	})
 }

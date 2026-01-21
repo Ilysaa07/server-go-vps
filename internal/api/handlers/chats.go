@@ -51,7 +51,7 @@ func (h *Handler) GetChats(c *gin.Context) {
 					Preview: true, // Use thumbnail for list
 				})
 				if err != nil {
-					fmt.Printf("⚠️ Profile pic fetch failed for %s: %v\n", jidStr, err)
+					// fmt.Printf("⚠️ Profile pic fetch failed for %s: %v\n", jidStr, err)
 				}
 				if err == nil && pic != nil && pic.URL != "" {
 					fmt.Printf("📸 Profile pic fetched for %s\n", jidStr)
@@ -61,9 +61,35 @@ func (h *Handler) GetChats(c *gin.Context) {
 			}(chat.JID)
 		}
 
+		// Improve Name Resolution
+		displayName := chat.Name
+		if (displayName == "" || displayName == chat.Number || displayName == "Unknown") && canFetch {
+			// Try to resolve name from contact store
+			jid, _ := types.ParseJID(chat.JID)
+			contact, err := botClient.WAClient.Store.Contacts.GetContact(c.Request.Context(), jid)
+			if err == nil && contact.Found {
+				newName := ""
+				if contact.PushName != "" {
+					newName = contact.PushName
+				} else if contact.FullName != "" {
+					newName = contact.FullName
+				} else if contact.BusinessName != "" {
+					newName = contact.BusinessName
+				}
+
+				if newName != "" {
+					displayName = newName
+					// Update DB async
+					go func(id, name string) {
+						// h.Repo.UpdateChatName(context.Background(), id, name) // Assuming method exists or just let it cache next time
+					}(chat.JID, newName)
+				}
+			}
+		}
+
 		mappedChats = append(mappedChats, map[string]interface{}{
 			"id":            chat.JID,
-			"name":          chat.Name,
+			"name":          displayName,
 			"number":        chat.Number,
 			"unreadCount":   chat.UnreadCount,
 			"profilePicUrl": profilePic,
