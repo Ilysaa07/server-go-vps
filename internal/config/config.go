@@ -55,7 +55,7 @@ func Load() *Config {
 
 		// Security
 		APIKey:         getEnv("API_KEY", ""),
-		AllowedDomains: parseAllowedDomains(getEnv("ALLOWED_DOMAINS", "http://localhost:3000")),
+		AllowedDomains: parseAllowedDomains(getEnv("ALLOWED_DOMAINS", "http://localhost:3000,https://valprointertech.com,https://valprointertech.vercel.app")),
 
 		// Firestore
 		FirebaseProjectID: getEnv("FIREBASE_PROJECT_ID", ""),
