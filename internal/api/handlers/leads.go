@@ -361,6 +361,8 @@ func (h *Handler) StopLeadsClient(c *gin.Context) {
 // SyncContactsStream handles GET /sync-contacts-stream
 // Uses Server-Sent Events to stream contacts progressively
 func (h *Handler) SyncContactsStream(c *gin.Context) {
+	fmt.Println("🚀 [SSE] SyncContactsStream started")
+	
 	// Set SSE headers
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
@@ -371,6 +373,7 @@ func (h *Handler) SyncContactsStream(c *gin.Context) {
 	// Helper function to send SSE event
 	sendEvent := func(eventType string, data interface{}) {
 		jsonData, _ := json.Marshal(data)
+		fmt.Printf("📤 [SSE] Sending event: %s\n", eventType)
 		fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", eventType, jsonData)
 		c.Writer.Flush()
 	}
