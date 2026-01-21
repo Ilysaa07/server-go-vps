@@ -57,6 +57,14 @@ func (h *Handler) GetChats(c *gin.Context) {
 					fmt.Printf("📸 Profile pic fetched for %s\n", jidStr)
 					// Update DB so next fetch has it
 					_ = h.Repo.UpdateChatProfilePic(context.Background(), jidStr, pic.URL)
+					
+					// Broadcast update to frontend for instant display
+					if h.WSHub != nil {
+						h.WSHub.Broadcast("chat-update", gin.H{
+							"id":            jidStr,
+							"profilePicUrl": pic.URL,
+						})
+					}
 				}
 			}(chat.JID)
 		}
@@ -82,6 +90,15 @@ func (h *Handler) GetChats(c *gin.Context) {
 					// Update DB async
 					go func(id, name string) {
 						// h.Repo.UpdateChatName(context.Background(), id, name) // Assuming method exists or just let it cache next time
+						// For now we don't have UpdateChatName expose? 
+						// Actually we just want live update on frontend.
+						
+						if h.WSHub != nil {
+							h.WSHub.Broadcast("chat-update", gin.H{
+								"id":   id,
+								"name": name,
+							})
+						}
 					}(chat.JID, newName)
 				}
 			}

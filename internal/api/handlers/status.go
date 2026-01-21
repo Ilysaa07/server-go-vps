@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"wa-server-go/internal/api/websocket"
 	"wa-server-go/internal/firestore"
 	"wa-server-go/internal/whatsapp"
 
@@ -14,13 +15,15 @@ import (
 type Handler struct {
 	WAManager *whatsapp.Manager
 	Repo      *firestore.ChatsRepository
+	WSHub     *websocket.Hub
 }
 
 // NewHandler creates a new handler with dependencies
-func NewHandler(waManager *whatsapp.Manager, repo *firestore.ChatsRepository) *Handler {
+func NewHandler(waManager *whatsapp.Manager, repo *firestore.ChatsRepository, wsHub *websocket.Hub) *Handler {
 	return &Handler{
 		WAManager: waManager,
 		Repo:      repo,
+		WSHub:     wsHub,
 	}
 }
 

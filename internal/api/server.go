@@ -37,7 +37,7 @@ func NewServer(cfg *config.Config, waManager *whatsapp.Manager, repo *firestore.
 	wsHub := websocket.NewHub()
 
 	// Create handlers
-	handler := handlers.NewHandler(waManager, repo)
+	handler := handlers.NewHandler(waManager, repo, wsHub)
 
 	server := &Server{
 		Config:    cfg,
