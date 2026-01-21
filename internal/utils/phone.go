@@ -153,31 +153,31 @@ func ResolveLIDToPhoneNumber(client *whatsmeow.Client, input interface{}) (strin
 		return targetJID.User, nil
 	}
 
-	// 3. Local Lookup in Store
-	// Note: We use context.Background() as local DB query is fast.
+	// 3. Check Global Cache first (In-Memory/File persistent)
+	if GlobalLIDCache != nil {
+		if phone, found := GlobalLIDCache.Get(targetJID.User); found {
+			return phone, nil
+		}
+	}
+
+	// 4. Fallback: Check local store (Validation only)
+	// We can't reverse lookup phone numbers easily from LIDs in standard store without iterating everything
+	// and even then, ContactInfo struct might not have the link. 
+	// So we just verify the LID exists as a contact.
+	
 	contact, err := client.Store.Contacts.GetContact(context.Background(), targetJID)
 	if err != nil {
 		return "", fmt.Errorf("store lookup error for %s: %w", targetJID, err)
 	}
 
-	// 4. Check if Found
 	if !contact.Found {
 		return "", fmt.Errorf("contact not found in local store for JID: %s", targetJID)
 	}
 
-	// 5. Attempt Extraction
-	// Since we queried an LID, and found a contact, strictly speaking, this 'ContactInfo' 
-	// belongs to the LID identity. 
-	// There is no standard field in types.ContactInfo that holds the "Real JID" (Phone JID).
-	// We return the User part of the JID we queried (the LID UUID) because that is the 
-	// only ID we have confirmed existence for locally.
+	// Return error indicating we know it exists but can't resolve it locally
+	// failing gracefully to return the LID itself is handled by caller usually,
+	// but here we return error to be strict, or just the LID user?
+	// The caller leads.go handles error by using displayID = lidJID.User
 	
-	// WARNING: This returns the LID UUID, NOT the phone number "628xxx", 
-	// unless the input was already a phone JID.
-	
-	// If the user REALLY needs the phone number and it's not here, 
-	// we'd need to return an error or look elsewhere.
-	// We'll return the LID User but log a warning if in debug mode.
-	
-	return targetJID.User, nil
+	return "", fmt.Errorf("LID %s exists but phone number not resolved in cache", targetJID.User)
 }

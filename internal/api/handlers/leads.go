@@ -414,11 +414,10 @@ func (h *Handler) SyncContactsStream(c *gin.Context) {
 		processedCount++
 	}
 
-	// Process LIDs - get contact info from store directly (GetUserInfo doesn't return phone mapping)
-	// Initialize Cache
+	// Initialize Cache (Global)
 	cachePath := "lid_mapping.json"
-	lidCache := utils.NewLIDCache(cachePath)
-	_ = lidCache.Load()
+	utils.InitGlobalCache(cachePath)
+	lidCache := utils.GlobalLIDCache // Use the singleton
 
 	// Process LIDs
 	fmt.Printf("🏷️ Processing %d LIDs (Smart Cache Mode)...\n", len(lidJIDs))
@@ -435,7 +434,6 @@ func (h *Handler) SyncContactsStream(c *gin.Context) {
 		// Check Cache
 		if phone, found := lidCache.Get(lidJID.User); found {
 			lidToResolvedID[lidJID.User] = phone
-			// fmt.Printf("   💾 Cached: %s -> %s\n", lidJID.User, phone)
 		} else {
 			uncachedLIDs = append(uncachedLIDs, lidJID)
 		}

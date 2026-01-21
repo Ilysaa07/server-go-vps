@@ -17,6 +17,9 @@ type LIDCache struct {
 var GlobalLIDCache *LIDCache
 
 func InitGlobalCache(path string) {
+	if GlobalLIDCache != nil {
+		return
+	}
 	GlobalLIDCache = NewLIDCache(path)
 	GlobalLIDCache.Load()
 }
