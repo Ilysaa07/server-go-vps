@@ -89,6 +89,7 @@ func (s *Server) setupRoutes() {
 
 		// Sync endpoints
 		protected.POST("/sync-contacts", s.Handler.SyncContacts)
+		protected.GET("/sync-contacts-stream", s.Handler.SyncContactsStream) // SSE streaming
 		protected.POST("/start-leads-client", s.Handler.StartLeadsClient)
 		protected.POST("/stop-leads-client", s.Handler.StopLeadsClient)
 

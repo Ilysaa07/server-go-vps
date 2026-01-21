@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -354,5 +355,205 @@ func (h *Handler) StopLeadsClient(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "Leads client stopped successfully",
+	})
+}
+
+// SyncContactsStream handles GET /sync-contacts-stream
+// Uses Server-Sent Events to stream contacts progressively
+func (h *Handler) SyncContactsStream(c *gin.Context) {
+	// Set SSE headers
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("Access-Control-Allow-Origin", c.GetHeader("Origin"))
+	c.Header("X-Accel-Buffering", "no") // For nginx
+
+	// Helper function to send SSE event
+	sendEvent := func(eventType string, data interface{}) {
+		jsonData, _ := json.Marshal(data)
+		fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", eventType, jsonData)
+		c.Writer.Flush()
+	}
+
+	// Auto-Start 'leads' client logic
+	clientID := "leads"
+	client, exists := h.WAManager.GetClient(clientID)
+
+	if !exists {
+		// Create and Connect
+		err := h.WAManager.CreateClient(context.Background(), clientID, "session-leads.db")
+		if err != nil {
+			sendEvent("error", gin.H{"error": err.Error()})
+			return
+		}
+		_ = h.WAManager.SetupEventHandlers(clientID)
+
+		go func() {
+			_ = h.WAManager.Connect(context.Background(), clientID)
+		}()
+
+		sendEvent("status", gin.H{"status": "requiresQR", "message": "Session started. Please scan QR code."})
+		return
+	}
+
+	if !client.IsReady() {
+		sendEvent("status", gin.H{"status": "requiresQR", "message": "Session not ready. Please scan QR code."})
+		return
+	}
+
+	ctx := context.Background()
+
+	sendEvent("status", gin.H{"status": "syncing", "message": "Fetching labels..."})
+
+	// Sync app state to get latest labels
+	needsFullSync := len(h.WAManager.LabelStore.GetAllLabels()) == 0
+
+	if err := client.WAClient.FetchAppState(ctx, appstate.WAPatchRegular, needsFullSync, false); err != nil {
+		fmt.Printf("⚠️ Failed to fetch WAPatchRegular: %v\n", err)
+	}
+	if err := client.WAClient.FetchAppState(ctx, appstate.WAPatchRegularLow, needsFullSync, false); err != nil {
+		fmt.Printf("⚠️ Failed to fetch WAPatchRegularLow: %v\n", err)
+	}
+	if err := client.WAClient.FetchAppState(ctx, appstate.WAPatchRegularHigh, needsFullSync, false); err != nil {
+		fmt.Printf("⚠️ Failed to fetch WAPatchRegularHigh: %v\n", err)
+	}
+
+	// Get JIDs that have "Leads for Web" label
+	targetLabel := "Leads for Web"
+	labeledJIDs := h.WAManager.LabelStore.GetJIDsForLabelName(targetLabel)
+
+	sendEvent("status", gin.H{
+		"status":  "processing",
+		"message": fmt.Sprintf("Found %d contacts with '%s' label", len(labeledJIDs), targetLabel),
+		"total":   len(labeledJIDs),
+	})
+
+	if len(labeledJIDs) == 0 {
+		sendEvent("complete", gin.H{"total": 0, "message": "No contacts found with label"})
+		return
+	}
+
+	// Separate LIDs and regular JIDs
+	var lidJIDs []types.JID
+	var regularJIDs []types.JID
+
+	for _, targetJID := range labeledJIDs {
+		jid, err := types.ParseJID(targetJID)
+		if err != nil {
+			jid, _ = types.ParseJID(targetJID + "@s.whatsapp.net")
+		}
+
+		if jid.Server == "lid" {
+			lidJIDs = append(lidJIDs, jid)
+		} else {
+			regularJIDs = append(regularJIDs, jid)
+		}
+	}
+
+	// Process regular JIDs first (no rate limiting needed)
+	processedCount := 0
+	for _, jid := range regularJIDs {
+		contact, _ := client.WAClient.Store.Contacts.GetContact(ctx, jid)
+		name := jid.User
+		if contact.Found {
+			if contact.FullName != "" {
+				name = contact.FullName
+			} else if contact.PushName != "" {
+				name = contact.PushName
+			}
+		}
+
+		displayID := strings.Replace(jid.User, "@s.whatsapp.net", "", -1)
+
+		sendEvent("contact", gin.H{
+			"id":    displayID,
+			"name":  name,
+			"phone": displayID,
+			"type":  "user",
+		})
+		processedCount++
+	}
+
+	// Process LIDs in batches with rate limiting
+	batchSize := 3
+	delayBetweenBatches := 5 * time.Second
+
+	for i := 0; i < len(lidJIDs); i += batchSize {
+		end := i + batchSize
+		if end > len(lidJIDs) {
+			end = len(lidJIDs)
+		}
+		batch := lidJIDs[i:end]
+
+		sendEvent("progress", gin.H{
+			"current": processedCount,
+			"total":   len(labeledJIDs),
+			"message": fmt.Sprintf("Processing batch %d-%d", i+1, end),
+		})
+
+		// Retry logic with exponential backoff
+		maxRetries := 3
+		retryDelay := 3 * time.Second
+
+		for retry := 0; retry < maxRetries; retry++ {
+			resp, err := client.WAClient.GetUserInfo(ctx, batch)
+			if err != nil {
+				if strings.Contains(err.Error(), "rate-overlimit") || strings.Contains(err.Error(), "429") {
+					sendEvent("progress", gin.H{"message": fmt.Sprintf("Rate limited, waiting %v...", retryDelay)})
+					time.Sleep(retryDelay)
+					retryDelay *= 2
+					continue
+				}
+				fmt.Printf("❌ GetUserInfo batch failed: %v\n", err)
+				break
+			}
+
+			// Process successful responses
+			for lidJID, info := range resp {
+				phone := ""
+				for _, device := range info.Devices {
+					if device.Server == "s.whatsapp.net" {
+						phone = device.User
+						break
+					}
+				}
+
+				if phone == "" {
+					continue // Skip unresolved LIDs
+				}
+
+				// Try to get name
+				name := phone
+				if phContact, err := client.WAClient.Store.Contacts.GetContact(ctx, types.JID{User: phone, Server: "s.whatsapp.net"}); err == nil && phContact.Found {
+					if phContact.FullName != "" {
+						name = phContact.FullName
+					} else if phContact.PushName != "" {
+						name = phContact.PushName
+					} else if phContact.BusinessName != "" {
+						name = phContact.BusinessName
+					}
+				}
+
+				sendEvent("contact", gin.H{
+					"id":    phone,
+					"name":  name,
+					"phone": phone,
+					"type":  "user",
+					"lidResolved": lidJID.User,
+				})
+				processedCount++
+			}
+			break // Success, exit retry loop
+		}
+
+		// Wait before next batch to avoid rate limiting
+		if end < len(lidJIDs) {
+			time.Sleep(delayBetweenBatches)
+		}
+	}
+
+	sendEvent("complete", gin.H{
+		"total":   processedCount,
+		"message": fmt.Sprintf("Sync completed. %d contacts synced.", processedCount),
 	})
 }

@@ -110,7 +110,12 @@ func APIKeyRequired(apiKey string) gin.HandlerFunc {
 			return
 		}
 
+		// Check header first, then query parameter (for EventSource/SSE)
 		reqAPIKey := c.GetHeader("x-api-key")
+		if reqAPIKey == "" {
+			reqAPIKey = c.Query("api_key")
+		}
+		
 		if reqAPIKey != apiKey {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: Invalid API Key"})
 			return
