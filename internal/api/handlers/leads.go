@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 	"wa-server-go/internal/utils"
 
 	"github.com/gin-gonic/gin"
@@ -414,60 +415,95 @@ func (h *Handler) SyncContactsStream(c *gin.Context) {
 	}
 
 	// Process LIDs - get contact info from store directly (GetUserInfo doesn't return phone mapping)
-	fmt.Printf("🏷️ Processing %d LIDs directly from contact store\n", len(lidJIDs))
+	fmt.Printf("🏷️ Processing %d LIDs (Network Resolution Mode)...\n", len(lidJIDs))
 	
+	// Map to track resolved ID for each LID
+	lidToResolvedID := make(map[string]string)
 	// Collect LIDs for async profile pic fetch
 	var pendingPics []types.JID
-	// Map to track resolved ID for each LID to update correct item later
-	lidToResolvedID := make(map[string]string)
 	
-	for i, lidJID := range lidJIDs {
-		// Get contact info from store
-		contact, _ := client.WAClient.Store.Contacts.GetContact(ctx, lidJID)
+	// Batch process LIDs for GetUserInfo
+	batchSize := 5 // Conservative batch size
+	delayBetweenBatches := 2 * time.Second
+	
+	for i := 0; i < len(lidJIDs); i += batchSize {
+		end := i + batchSize
+		if end > len(lidJIDs) {
+			end = len(lidJIDs)
+		}
+		batch := lidJIDs[i:end]
 		
-		// Determine name
-		name := lidJID.User // Default to LID user part
-		if contact.Found {
-			if contact.PushName != "" {
-				name = contact.PushName
-			} else if contact.FullName != "" {
-				name = contact.FullName
-			} else if contact.BusinessName != "" {
-				name = contact.BusinessName
+		fmt.Printf("🔄 Resolving batch %d-%d of %d...\n", i+1, end, len(lidJIDs))
+		
+		// Map for this batch to store resolved results
+		batchResults := make(map[string]string) // LID -> Phone
+		
+		// 1. Try Network Resolution (Best Practice)
+		resp, err := client.WAClient.GetUserInfo(ctx, batch)
+		if err != nil {
+			fmt.Printf("⚠️ Batch GetUserInfo failed: %v. Falling back to local/utils.\n", err)
+			// Fallback will happen below per item
+		} else {
+			for lidJID, info := range resp {
+				for _, device := range info.Devices {
+					if device.Server == "s.whatsapp.net" {
+						batchResults[lidJID.User] = device.User
+						fmt.Printf("   ✅ Resolved: %s -> %s\n", lidJID.User, device.User)
+						break
+					}
+				}
 			}
 		}
-		
-		// RESOLVE LID TO PHONE NUMBER
-		resolvedNum, err := utils.ResolveLIDToPhoneNumber(client.WAClient, lidJID)
-		displayID := lidJID.User
-		if err == nil && resolvedNum != "" {
-			displayID = resolvedNum
+
+		// 2. Process each LID in batch with results or fallback
+		for _, lidJID := range batch {
+			// Determine initial name from local store
+			contact, _ := client.WAClient.Store.Contacts.GetContact(ctx, lidJID)
+			name := lidJID.User
+			if contact.Found {
+				if contact.PushName != "" {
+					name = contact.PushName
+				} else if contact.FullName != "" {
+					name = contact.FullName
+				} else if contact.BusinessName != "" {
+					name = contact.BusinessName
+				}
+			}
+
+			// Final Resolution Strategy
+			displayID := lidJID.User
+			
+			// Priority 1: Network Result
+			if phone, ok := batchResults[lidJID.User]; ok {
+				displayID = phone
+			} else {
+				// Priority 2: Local Utils Helper (Fallback)
+				resolvedNum, err := utils.ResolveLIDToPhoneNumber(client.WAClient, lidJID)
+				if err == nil && resolvedNum != "" {
+					displayID = resolvedNum
+				}
+			}
+			
+			// Track mapping for profile pic update later
+			lidToResolvedID[lidJID.User] = displayID
+			
+			// Queue for profile pic
+			pendingPics = append(pendingPics, lidJID)
+			
+			sendEvent("contact", gin.H{
+				"id":            displayID,
+				"name":          name,
+				"phone":         displayID,
+				"type":          "lid",
+				"isLID":         true,
+				"profilePicUrl": "", // Will be updated async
+			})
+			processedCount++
 		}
 		
-		// Track mapping
-		lidToResolvedID[lidJID.User] = displayID
-		
-		// Send contact immediately (without waiting for profile pic)
-		sendEvent("contact", gin.H{
-			"id":            displayID,
-			"name":          name,
-			"phone":         displayID, // Use resolved number if available
-			"type":          "lid",
-			"isLID":         true,
-			"profilePicUrl": "", // Will be updated async
-		})
-		processedCount++
-		
-		// Queue for async profile pic fetch
-		pendingPics = append(pendingPics, lidJID)
-		
-		// Send progress every 20 contacts
-		if (i+1) % 20 == 0 {
-			sendEvent("progress", gin.H{
-				"current": processedCount,
-				"total":   len(labeledJIDs),
-				"message": fmt.Sprintf("Processed %d/%d contacts", processedCount, len(labeledJIDs)),
-			})
+		// Rate limit protection
+		if end < len(lidJIDs) {
+			time.Sleep(delayBetweenBatches)
 		}
 	}
 
