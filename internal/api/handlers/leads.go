@@ -478,8 +478,8 @@ func (h *Handler) SyncContactsStream(c *gin.Context) {
 	}
 
 	// Process LIDs in batches with rate limiting
-	batchSize := 3
-	delayBetweenBatches := 5 * time.Second
+	batchSize := 10  // Increased for faster processing
+	delayBetweenBatches := 2 * time.Second  // Reduced delay, rely on retry for rate limits
 
 	for i := 0; i < len(lidJIDs); i += batchSize {
 		end := i + batchSize
