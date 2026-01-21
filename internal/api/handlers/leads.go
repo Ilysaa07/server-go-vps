@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/appstate"
 	"go.mau.fi/whatsmeow/types"
 )
@@ -496,15 +497,25 @@ func (h *Handler) SyncContactsStream(c *gin.Context) {
 			}
 		}
 		
+		// Get profile picture URL
+		profilePicUrl := ""
+		pic, err := client.WAClient.GetProfilePictureInfo(ctx, lidJID, &whatsmeow.GetProfilePictureParams{
+			Preview: true, // Use thumbnail for list (faster download)
+		})
+		if err == nil && pic != nil {
+			profilePicUrl = pic.URL
+		}
+		
 		// Use LID as the identifier - it's valid for sending messages
 		displayID := lidJID.User
 		
 		sendEvent("contact", gin.H{
-			"id":       displayID,
-			"name":     name,
-			"phone":    displayID, // LID can be used to send messages
-			"type":     "lid",
-			"isLID":    true,
+			"id":            displayID,
+			"name":          name,
+			"phone":         displayID, // LID can be used to send messages
+			"type":          "lid",
+			"isLID":         true,
+			"profilePicUrl": profilePicUrl,
 		})
 		processedCount++
 		
