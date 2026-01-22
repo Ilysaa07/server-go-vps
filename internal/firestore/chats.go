@@ -2,6 +2,7 @@ package firestore
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -19,6 +20,7 @@ type WAChat struct {
 	LastMessageBody string    `firestore:"lastMessageBody,omitempty"`
 	LastMessageAt   time.Time `firestore:"lastMessageAt,omitempty"`
 	ProfilePicURL   string    `firestore:"profilePicUrl,omitempty"`
+	HasInvoice      bool      `firestore:"hasInvoice,omitempty"`
 	UpdatedAt       time.Time `firestore:"updatedAt"`
 }
 
@@ -155,6 +157,7 @@ func (r *ChatsRepository) updateChatFromMessage(ctx context.Context, msg *WAMess
 			LastMessageBody: truncateBody(msg.Body),
 			LastMessageAt:   msg.Timestamp,
 			UpdatedAt:       now,
+			HasInvoice:      strings.Contains(strings.ToUpper(msg.Body), "INV-") || strings.Contains(strings.ToLower(msg.Body), "invoice") || strings.Contains(strings.ToLower(msg.Body), "tagihan"),
 		}
 		if msg.FromMe {
 			newChat.Number = msg.To
@@ -176,6 +179,11 @@ func (r *ChatsRepository) updateChatFromMessage(ctx context.Context, msg *WAMess
 	}
 	if !msg.FromMe {
 		updates = append(updates, firestore.Update{Path: "unreadCount", Value: firestore.Increment(1)})
+	}
+
+	// Check for invoice keywords to auto-mark as relevant
+	if strings.Contains(strings.ToUpper(msg.Body), "INV-") || strings.Contains(strings.ToLower(msg.Body), "invoice") || strings.Contains(strings.ToLower(msg.Body), "tagihan") {
+		updates = append(updates, firestore.Update{Path: "hasInvoice", Value: true})
 	}
 
 	_, err = doc.Ref.Update(ctx, updates)
@@ -203,9 +211,59 @@ func (r *ChatsRepository) MarkChatAsRead(ctx context.Context, chatJID string) er
 
 // GetInvoiceChats retrieves chats that contain invoice messages
 func (r *ChatsRepository) GetInvoiceChats(ctx context.Context, limit int) ([]WAChat, error) {
-	// For now, return all chats - invoice filtering should be done at query time
-	// A more efficient approach would be to add an "hasInvoice" flag on chats
-	return r.GetRecentChats(ctx, limit)
+	query := r.client.Collection(r.chatsCollection).
+		Where("hasInvoice", "==", true).
+		OrderBy("lastMessageAt", firestore.Desc)
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+
+	iter := query.Documents(ctx)
+
+	var chats []WAChat
+	for {
+		doc, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		var chat WAChat
+		if err := doc.DataTo(&chat); err != nil {
+			continue
+		}
+		chat.ID = doc.Ref.ID
+		chats = append(chats, chat)
+	}
+
+	return chats, nil
+}
+
+// SetChatHasInvoice marks a chat as relevant to invoices
+func (r *ChatsRepository) SetChatHasInvoice(ctx context.Context, jid string, hasInvoice bool) error {
+	iter := r.client.Collection(r.chatsCollection).
+		Where("jid", "==", jid).
+		Limit(1).
+		Documents(ctx)
+
+	doc, err := iter.Next()
+	// If chat doesn't exist, we should create it or ignore. 
+	// Sending an invoice usually implies the chat exists or will be created by SaveMessage.
+	// Since SendInvoice calls SaveMessage (async), we might race. 
+	// But assuming SendInvoice calls this, it should be fine to just update if exists.
+	if err == iterator.Done {
+		return nil 
+	}
+	if err != nil {
+		return err
+	}
+
+	_, err = doc.Ref.Update(ctx, []firestore.Update{
+		{Path: "hasInvoice", Value: hasInvoice},
+	})
+	return err
 }
 
 // UpdateChatName updates the name of a chat

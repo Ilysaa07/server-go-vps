@@ -125,6 +125,7 @@ func (h *Handler) SendInvoice(c *gin.Context) {
 		}
 		if h.Repo != nil {
 			_ = h.Repo.SaveMessage(context.Background(), dbMsg)
+			_ = h.Repo.SetChatHasInvoice(context.Background(), jid.String(), true)
 		}
 
 		h.WAManager.BroadcastMessage(whatsapp.NewMessageEvent{
@@ -249,6 +250,7 @@ func (h *Handler) sendPDF(ctx context.Context, client *whatsapp.Client, jid type
 		}
 		if h.Repo != nil {
 			_ = h.Repo.SaveMessage(context.Background(), dbMsg)
+			_ = h.Repo.SetChatHasInvoice(context.Background(), jid.String(), true)
 		}
 
 		// 2. Broadcast WS
