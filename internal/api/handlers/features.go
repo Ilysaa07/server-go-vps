@@ -40,3 +40,32 @@ func (h *Handler) TriggerBlog(c *gin.Context) {
 		"message": "Blog generation triggered (implementation pending)",
 	})
 }
+
+// SyncInvoices handles POST /sync-invoices
+func (h *Handler) SyncInvoices(c *gin.Context) {
+	if h.Repo == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"success": false,
+			"error":   "Chat storage (Firestore) is not configured",
+		})
+		return
+	}
+
+	// This handler is now "SyncChatMetadata" but we keep the endpoint /sync-invoices for compatibility
+	// or we can rename the handler. Let's redirect to ScanChatMetadata.
+	count, err := h.Repo.ScanChatMetadata(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Failed to scan chats",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Invoice chats synced successfully",
+		"updated": count,
+	})
+}

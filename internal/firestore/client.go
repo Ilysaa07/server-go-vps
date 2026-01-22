@@ -65,3 +65,8 @@ func (c *Client) Collection(path string) *firestore.CollectionRef {
 func (c *Client) Doc(path string) *firestore.DocumentRef {
 	return c.FS.Doc(path)
 }
+
+// Batch returns a write batch
+func (c *Client) Batch() *firestore.WriteBatch {
+	return c.FS.Batch()
+}

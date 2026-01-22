@@ -96,6 +96,7 @@ func (s *Server) setupRoutes() {
 		// Feature endpoints
 		protected.POST("/trigger-backup", s.Handler.TriggerBackup)
 		protected.POST("/api/blog/manual-trigger", s.Handler.TriggerBlog)
+		protected.POST("/sync-invoices", s.Handler.SyncInvoices)
 	}
 }
 

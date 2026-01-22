@@ -21,6 +21,7 @@ type WAChat struct {
 	LastMessageAt   time.Time `firestore:"lastMessageAt,omitempty"`
 	ProfilePicURL   string    `firestore:"profilePicUrl,omitempty"`
 	HasInvoice      bool      `firestore:"hasInvoice,omitempty"`
+	IsOTP           bool      `firestore:"isOTP,omitempty"`
 	UpdatedAt       time.Time `firestore:"updatedAt"`
 }
 
@@ -61,6 +62,7 @@ func NewChatsRepository(client *Client) *ChatsRepository {
 // GetRecentChats retrieves recent chats ordered by last message time
 func (r *ChatsRepository) GetRecentChats(ctx context.Context, limit int) ([]WAChat, error) {
 	query := r.client.Collection(r.chatsCollection).
+		Where("isOTP", "==", false).
 		OrderBy("lastMessageAt", firestore.Desc)
 	if limit > 0 {
 		query = query.Limit(limit)
@@ -158,12 +160,26 @@ func (r *ChatsRepository) updateChatFromMessage(ctx context.Context, msg *WAMess
 			LastMessageAt:   msg.Timestamp,
 			UpdatedAt:       now,
 			HasInvoice:      strings.Contains(strings.ToUpper(msg.Body), "INV-") || strings.Contains(strings.ToLower(msg.Body), "invoice") || strings.Contains(strings.ToLower(msg.Body), "tagihan"),
+			IsOTP:           strings.Contains(strings.ToLower(msg.Body), "otp") || strings.Contains(strings.ToLower(msg.Body), "kode verifikasi") || strings.Contains(strings.ToLower(msg.Body), "verification code"),
 		}
 		if msg.FromMe {
 			newChat.Number = msg.To
 		} else {
 			newChat.UnreadCount = 1
 		}
+		
+		// Initial Filter Check for New Chat
+		// Check Body
+		bodyLower := strings.ToLower(msg.Body)
+		if strings.Contains(bodyLower, "otp") || strings.Contains(bodyLower, "kode verifikasi") || strings.Contains(bodyLower, "verification code") {
+			newChat.IsOTP = true
+		}
+		// Check Sender
+		sender := strings.ToLower(msg.From)
+		if strings.Contains(sender, "stockbit") || strings.Contains(sender, "628999800123") || strings.Contains(sender, "tri") {
+			newChat.IsOTP = true
+		}
+
 		_, _, err = r.client.Collection(r.chatsCollection).Add(ctx, newChat)
 		return err
 	}
@@ -184,6 +200,24 @@ func (r *ChatsRepository) updateChatFromMessage(ctx context.Context, msg *WAMess
 	// Check for invoice keywords to auto-mark as relevant
 	if strings.Contains(strings.ToUpper(msg.Body), "INV-") || strings.Contains(strings.ToLower(msg.Body), "invoice") || strings.Contains(strings.ToLower(msg.Body), "tagihan") {
 		updates = append(updates, firestore.Update{Path: "hasInvoice", Value: true})
+	}
+
+	// Check for OTP keywords to auto-mark as OTP
+	bodyLower := strings.ToLower(msg.Body)
+	isOTP := strings.Contains(bodyLower, "otp") || strings.Contains(bodyLower, "kode verifikasi") || strings.Contains(bodyLower, "verification code")
+	
+	// Filter specific senders (Stockbit, TRI)
+	// We check the JID/Number or Name if available in the doc (but doc is 'doc', here we just have msg and updates).
+	// We can't easily check Name from 'updates' unless we read 'doc' data again or used 'doc.DataTo' earlier.
+	// However, usually these come from specific numbers or sender IDs.
+	// For now, let's filter by Number in the 'msg.From' (JID).
+	sender := strings.ToLower(msg.From) // 62899... or stockbit
+	if strings.Contains(sender, "stockbit") || strings.Contains(sender, "628999800123") || strings.Contains(sender, "tri") {
+		isOTP = true
+	}
+
+	if isOTP {
+		updates = append(updates, firestore.Update{Path: "isOTP", Value: true})
 	}
 
 	_, err = doc.Ref.Update(ctx, updates)
@@ -314,4 +348,90 @@ func truncateBody(body string) string {
 		return body
 	}
 	return body[:maxLen] + "..."
+}
+
+// ScanChatMetadata scans all chats and updates metadata flags (HasInvoice, IsOTP) based on keywords
+func (r *ChatsRepository) ScanChatMetadata(ctx context.Context) (int, error) {
+	iter := r.client.Collection(r.chatsCollection).Documents(ctx)
+	count := 0
+	batchSize := 500
+	batch := r.client.Batch()
+	operationCount := 0
+
+	for {
+		doc, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return count, err
+		}
+
+		var chat WAChat
+		if err := doc.DataTo(&chat); err != nil {
+			continue
+		}
+
+		body := strings.ToLower(chat.LastMessageBody)
+		
+		// 1. Invoice Check
+		hasInvoice := strings.Contains(body, "inv-") || strings.Contains(body, "invoice") || strings.Contains(body, "tagihan")
+		
+		// 2. OTP Check
+		isOTP := strings.Contains(body, "otp") || strings.Contains(body, "kode verifikasi") || strings.Contains(body, "verification code")
+
+		// 3. Sender Filter (Stockbit, TRI)
+		// Check Name and Number
+		nameLower := strings.ToLower(chat.Name)
+		number := chat.Number // usually just digits, but sometimes full JID
+		if strings.Contains(nameLower, "stockbit") || strings.Contains(nameLower, "tri indonesia") || strings.Contains(number, "628999800123") {
+			isOTP = true
+		}
+
+		updates := []firestore.Update{}
+		needsUpdate := false
+
+		if hasInvoice && !chat.HasInvoice {
+			updates = append(updates, firestore.Update{Path: "hasInvoice", Value: true})
+			needsUpdate = true
+		}
+		
+		// Always ensure IsOTP is set (default to false if not found, to include in index)
+		// But here we only update if it CHANGED to true, or isn't set.
+		// Actually, to make "Where IsOTP == false" work, ALL documents MUST have IsOTP field.
+		// So we should set IsOTP = false if it's currently nil/missing (which in struct defaults to false, but in DB might be missing).
+		// We'll force update if IsOTP mismatch.
+		// BUT 'chat.IsOTP' from DataTo might be false if missing.
+		// We want to write 'false' explicitly if missing. 
+		// Simpler approach: Just write 'isOTP' = isOTP calculated value if it's currently different or we suspect it's missing.
+		// Since we can't easily know if it's missing vs false in Go struct without custom unmarshalling map, 
+		// we'll explicitly update 'isOTP' for ALL documents that we process to ensure consistency for the index.
+		
+		updates = append(updates, firestore.Update{Path: "isOTP", Value: isOTP})
+		needsUpdate = true // Force update to ensure backfill
+
+		if needsUpdate {
+			batch.Update(doc.Ref, updates)
+			count++
+			operationCount++
+		}
+
+		// Commit batch if limit reached
+		if operationCount >= batchSize {
+			if _, err := batch.Commit(ctx); err != nil {
+				return count, err
+			}
+			batch = r.client.Batch()
+			operationCount = 0
+		}
+	}
+
+	// Commit remaining
+	if operationCount > 0 {
+		if _, err := batch.Commit(ctx); err != nil {
+			return count, err
+		}
+	}
+
+	return count, nil
 }
