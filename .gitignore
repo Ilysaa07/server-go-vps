@@ -32,3 +32,5 @@ uploads/
 
 # Credentials
 dashboard-valpro-firebase-adminsdk-*.json
+server-go
+wa-server
