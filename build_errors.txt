@@ -1,0 +1,47 @@
+﻿go : # wa-server-go
+/internal/whatsapp
+At line:1 char:1
++ go build 
+./cmd/server 2>&1 
+| Out-File 
+-FilePath 
+build_errors.txt 
+-Enc ...
++ ~~~~~~~~~~~~~~~~~
+~~~~~~~~~
+    + CategoryInfo 
+             : 
+NotSpecifi    ed: 
+(# wa-server-g    
+o/internal/whatsap 
+   p:String) [], 
+Remo    teException
+    + 
+FullyQualifiedEr   
+ rorId : 
+NativeComm    
+andError
+ 
+internal\whatsapp\c
+lient.go:165:3: 
+unknown field Url 
+in struct literal 
+of type waE2E.Docum
+entMessage, but 
+does have URL
+internal\whatsapp\c
+lient.go:169:3: 
+unknown field 
+FileEncSha256 in 
+struct literal of 
+type waE2E.Document
+Message, but does 
+have FileEncSHA256
+internal\whatsapp\c
+lient.go:170:3: 
+unknown field 
+FileSha256 in 
+struct literal of 
+type waE2E.Document
+Message, but does 
+have FileSHA256

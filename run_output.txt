@@ -1,0 +1,47 @@
+﻿
+≡ƒÜÇ Initializing WhatsApp Server (Go)...
+=========================================
+≡ƒôî Running as Go/whatsmeow (socket-based)
+≡ƒôî Session: SQLite (local)
+≡ƒôî Business Data: Firestore
+=========================================
+
+go : 2026/01/19 
+10:10:40 Failed to 
+create bot client: 
+failed to create 
+SQLite container: 
+failed to upgrade 
+database: failed 
+to check if 
+foreign keys are 
+enabled: Binary 
+was compiled with 
+'CGO_ENABLED=0', 
+go-sqlite3 
+requires cgo to 
+work. This is a 
+stub
+At line:1 char:1
++ go run 
+./cmd/server *>&1 
+| Out-File 
+-FilePath 
+run_output.txt 
+-Encodin ...
++ ~~~~~~~~~~~~~~~~~
+~~~~~~~
+    + CategoryInfo 
+             : No  
+  tSpecified: (2   
+ 026/01/19 10:1    
+... This is a     
+stub:String) [    
+], RemoteExcep    
+tion
+    + FullyQualifi 
+   edErrorId : Na  
+  tiveCommandErr   
+ or
+ 
+exit status 1

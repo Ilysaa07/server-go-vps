@@ -1,0 +1,18 @@
+[Unit]
+Description=WhatsApp Go Server
+After=network.target
+
+[Service]
+# CHANGE user to your VPS username if not root
+User=devalpro
+# CHANGE working directory if different
+WorkingDirectory=/home/devalpro/server-go
+ExecStart=/home/devalpro/server-go/wa-server
+Restart=always
+RestartSec=10
+Environment=GIN_MODE=release
+# Increase file descriptors if needed
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
