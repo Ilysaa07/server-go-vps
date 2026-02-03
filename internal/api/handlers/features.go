@@ -100,32 +100,39 @@ func (h *Handler) TriggerBackup(c *gin.Context) {
 		}
 		backupData := dumpResponse.Data
 
-		// Generate Excel file
-		excelData, err := generateBackupExcel(backupData)
+		// Generate JSON file (Primary backup for restore)
+		jsonData, err := json.MarshalIndent(backupData, "", "  ")
 		if err != nil {
-			fmt.Printf("[Backup] Failed to generate Excel: %v\n", err)
+			fmt.Printf("[Backup] Failed to marshal JSON: %v\n", err)
 			botClient.SendTextMessage(ctx, backupPhone+"@s.whatsapp.net", 
-				"❌ *BACKUP FAILED*\n\nGagal generate Excel: "+err.Error())
+				"❌ *BACKUP FAILED*\n\nGagal generate JSON: "+err.Error())
 			return
 		}
 
-		// Send the Excel file via WhatsApp
+		// Send the JSON file via WhatsApp
 		timestamp := time.Now().Format("2006-01-02_15-04")
-		filename := fmt.Sprintf("backup_valpro_%s.xlsx", timestamp)
-		caption := fmt.Sprintf("✅ *BACKUP DATA VAULT*\n\n📅 %s\n📊 %d Clients\n📑 %d Invoices\n🔧 %d Services",
+		filename := fmt.Sprintf("backup_valpro_%s.json", timestamp)
+		caption := fmt.Sprintf("✅ *BACKUP DATA VAULT (JSON)*\n\n📅 %s\n📊 %d Clients\n📑 %d Invoices\n🔧 %d Services\n\n_Gunakan file ini untuk fitur Restore_",
 			time.Now().Format("02 Jan 2006 15:04 WIB"),
 			len(backupData.Clients),
 			len(backupData.Invoices),
 			len(backupData.Services))
 
-		err = botClient.SendDocument(ctx, backupPhone+"@s.whatsapp.net", excelData, filename, 
-			"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", caption)
+		err = botClient.SendDocument(ctx, backupPhone+"@s.whatsapp.net", jsonData, filename, 
+			"application/json", caption)
 		if err != nil {
-			fmt.Printf("[Backup] Failed to send document: %v\n", err)
+			fmt.Printf("[Backup] Failed to send JSON document: %v\n", err)
+			// Try sending text notification at least
 			botClient.SendTextMessage(ctx, backupPhone+"@s.whatsapp.net", 
-				"❌ *BACKUP FAILED*\n\nGagal mengirim file: "+err.Error())
+				"❌ *BACKUP FAILED*\n\nGagal mengirim file JSON: "+err.Error())
 			return
 		}
+
+		fmt.Printf("[Backup] Successfully sent JSON backup to %s\n", backupPhone)
+
+		// TODO: Optional - Send Excel as well for human readability if needed
+
+
 
 		fmt.Printf("[Backup] Successfully sent backup to %s\n", backupPhone)
 	}()
