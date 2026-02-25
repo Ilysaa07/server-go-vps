@@ -1140,3 +1140,73 @@ func truncate(s string, n int) string {
 	}
 	return s
 }
+
+// autoReplyCache tracks the last time an auto-reply was sent to a specific phone number to prevent spam (value: time.Time)
+var autoReplyCache sync.Map
+
+// HandleBotAutoResponder sends an automatic reply when a client messages the WhatsApp bot
+func (h *Handler) HandleBotAutoResponder(evt whatsapp.NewMessageEvent) {
+	// 1. Ignore if message is sent by the bot itself
+	if evt.FromMe {
+		return
+	}
+
+	// 2. Ignore if message is from an authorized admin (we don't want to auto-reply to our own admins)
+	if h.isAuthorizedAdmin(evt.From) {
+		return
+	}
+
+	// 3. Ignore if this is a quote reply for the Web Chat bridge
+	// (HandleAgentReply will take care of Web Chat bridge messages if any)
+	if evt.QuotedMsgBody != "" {
+		sessionID := extractSessionID(evt.QuotedMsgBody)
+		if sessionID != "" {
+			return // This is part of a web chat bridge conversation, do not send invoice auto-reply
+		}
+	}
+
+	// 4. Rate Limiting: Check if we've sent an auto-reply to this number recently (e.g., within 30 minutes)
+	lastReplyVal, exists := autoReplyCache.Load(evt.From)
+	if exists {
+		lastReplyTime, ok := lastReplyVal.(time.Time)
+		if ok && time.Since(lastReplyTime) < 30*time.Minute {
+			log.Printf("🤖 AutoResponder: Skipping auto-reply for %s (cooldown active)", evt.From)
+			return // Still in cooldown
+		}
+	}
+
+	// Update cache
+	autoReplyCache.Store(evt.From, time.Now())
+
+	// 5. Build the professional auto-reply template
+	replyMessage := `Halo! 👋 Terima kasih telah menghubungi Valpro Intertech.
+Pesan Anda telah diterima secara otomatis oleh sistem kami.
+
+✅ *Konfirmasi Pembayaran*
+Apabila Anda melampirkan bukti transfer pembayaran Invoice, mohon pastikan *Nomor Invoice* terlihat atau disebutkan. Tim Finance kami akan segera memverifikasi dan memperbarui status tagihan Anda pada jam kerja.
+
+💬 *Informasi & Bantuan CS*
+Jika Anda membutuhkan bantuan Admin, pertanyaan teknis, atau layanan lainnya, silakan hubungi Customer Service kami di saluran berikut:
+📞 WhatsApp/Telp: +62 813-9971-0085
+📧 Email: mail@valprointertech.com
+🌐 Website: valprointertech.com
+
+_Mohon diperhatikan bahwa nomor ini digunakan oleh sistem robot untuk pengiriman notifikasi otomatis tagihan, sehingga balasan manual mungkin memerlukan waktu lebih lama._
+
+Terima kasih atas kepercayaan Anda kepada Valpro Intertech! ✨`
+
+	// 6. Send the message back via the exact client that received it
+	if h.waManager != nil {
+		client, ok := h.waManager.GetClient(evt.Client)
+		if ok && client != nil && client.WAClient != nil {
+			log.Printf("🤖 AutoResponder: Sending acknowledgment to %s", evt.From)
+			go func() {
+				// evt.ChatID contains the target JID address
+				err := client.SendTextMessage(context.Background(), evt.ChatID, replyMessage)
+				if err != nil {
+					log.Printf("❌ AutoResponder Error: %v", err)
+				}
+			}()
+		}
+	}
+}

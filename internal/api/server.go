@@ -237,6 +237,9 @@ func (s *Server) forwardEvents() {
 		case msg := <-s.WAManager.MessageChannel():
 			// BRIDGE: Check for Agent Reply to Web Visitor
 			go s.ChatHandler.HandleAgentReply(msg)
+
+			// AUTO-REPLY: Handle client replies to invoices on WA Bot
+			go s.ChatHandler.HandleBotAutoResponder(msg)
 			
 			// Broadcast to Dashboard
 			s.WSHub.Broadcast("new-message", msg)
