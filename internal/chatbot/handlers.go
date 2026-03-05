@@ -1,9 +1,11 @@
 package chatbot
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -1165,48 +1167,83 @@ func (h *Handler) HandleBotAutoResponder(evt whatsapp.NewMessageEvent) {
 		}
 	}
 
-	// 4. Rate Limiting: Check if we've sent an auto-reply to this number recently (e.g., within 30 minutes)
-	lastReplyVal, exists := autoReplyCache.Load(evt.From)
-	if exists {
-		lastReplyTime, ok := lastReplyVal.(time.Time)
-		if ok && time.Since(lastReplyTime) < 30*time.Minute {
-			log.Printf("🤖 AutoResponder: Skipping auto-reply for %s (cooldown active)", evt.From)
-			return // Still in cooldown
+	// No 30 minute rate limiting here for interactive chatbot
+
+	webhookURL := h.config.WebURL + "/api/whatsapp/webhook"
+	apiKey := h.config.APIKey
+
+	go func() {
+		log.Printf("🤖 AutoResponder: Executing webhook to %s for %s", webhookURL, evt.From)
+
+		// Create Payload
+		payload := map[string]interface{}{
+			"phone":     evt.From,
+			"chatId":    evt.ChatID,
+			"pushName":  evt.ChatName,
+			"message":   evt.Body,
+			"messageId": evt.ID,
 		}
-	}
 
-	// Update cache
-	autoReplyCache.Store(evt.From, time.Now())
+		payloadBytes, err := json.Marshal(payload)
+		if err != nil {
+			log.Printf("❌ AutoResponder Webhook JSON Error: %v", err)
+			return
+		}
 
-	// 5. Build the professional auto-reply template
-	replyMessage := `Halo! 👋 Terima kasih telah menghubungi Valpro Intertech.
-Pesan Anda telah diterima secara otomatis oleh sistem kami.
+		// Create HTTP Request
+		req, err := http.NewRequest("POST", webhookURL, bytes.NewBuffer(payloadBytes))
+		if err != nil {
+			log.Printf("❌ AutoResponder Webhook Request Error: %v", err)
+			return
+		}
 
-✅ *Konfirmasi Pembayaran*
-Apabila Anda melampirkan bukti transfer pembayaran Invoice, mohon pastikan *Nomor Invoice* terlihat atau disebutkan. Tim Finance kami akan segera memverifikasi dan memperbarui status tagihan Anda pada jam kerja.
+		req.Header.Set("Content-Type", "application/json")
+		if apiKey != "" {
+			req.Header.Set("x-api-key", apiKey)
+		}
 
-💬 *Informasi & Bantuan CS*
-Jika Anda membutuhkan bantuan Admin, pertanyaan teknis, atau layanan lainnya, silakan hubungi Customer Service kami di saluran berikut:
-📞 WhatsApp/Telp: +62 813-9971-0085
-📧 Email: mail@valprointertech.com
-🌐 Website: valprointertech.com
+		// Execute HTTP Request
+		clientHTTP := &http.Client{Timeout: 10 * time.Second}
+		resp, err := clientHTTP.Do(req)
+		if err != nil {
+			log.Printf("❌ AutoResponder Webhook Call Error: %v", err)
+			return
+		}
+		defer resp.Body.Close()
 
-_Mohon diperhatikan bahwa nomor ini digunakan oleh sistem robot untuk pengiriman notifikasi otomatis tagihan, sehingga balasan manual mungkin memerlukan waktu lebih lama._
+		// Read Webhook Response
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("❌ AutoResponder Webhook Response Read Error: %v", err)
+			return
+		}
 
-Terima kasih atas kepercayaan Anda kepada Valpro Intertech! ✨`
+		if resp.StatusCode != http.StatusOK {
+			log.Printf("❌ AutoResponder Webhook non-200. StatusCode: %d, Response: %s", resp.StatusCode, string(bodyBytes))
+			return
+		}
 
-	// 6. Send the message back via the exact client that received it
-	if h.waManager != nil {
-		client, ok := h.waManager.GetClient(evt.Client)
-		if ok && client != nil && client.WAClient != nil {
-			log.Printf("🤖 AutoResponder: Sending acknowledgment to %s", evt.From)
-			go func() {
-				// evt.ChatID contains the target JID address
-				err := client.SendTextMessage(context.Background(), evt.ChatID, replyMessage)
+		// Parse Reply JSON: {"reply": "Hello text..."}
+		var webhookResp struct {
+			Reply string `json:"reply"`
+		}
+		if err := json.Unmarshal(bodyBytes, &webhookResp); err != nil {
+			log.Printf("❌ AutoResponder Webhook parse response error: %v. Raw: %s", err, string(bodyBytes))
+			return
+		}
+
+		// Send WhatsApp message back
+		if webhookResp.Reply != "" && h.waManager != nil {
+			client, ok := h.waManager.GetClient(evt.Client)
+			if ok && client != nil && client.WAClient != nil {
+				log.Printf("🤖 AutoResponder: Sending webhook reply to %s", evt.ChatID)
+				err := client.SendTextMessage(context.Background(), evt.ChatID, webhookResp.Reply)
 				if err != nil {
-					log.Printf("❌ AutoResponder Error: %v", err)
+					log.Printf("❌ AutoResponder SendTextMessage Error: %v", err)
 				}
-			}()
+			}
+		} else if webhookResp.Reply == "" {
+			log.Printf("🤖 AutoResponder: Webhook returned empty reply, not sending anything.")
 		}
-	}
+	}()
 }
