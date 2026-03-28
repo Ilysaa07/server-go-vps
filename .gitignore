@@ -1,0 +1,19 @@
+# Binary
+ahu-checker
+ahu-checker.exe
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
