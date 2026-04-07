@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"wa-server-go/internal/api"
 	"wa-server-go/internal/config"
@@ -65,7 +66,7 @@ func main() {
 
 
 	// Create and start HTTP server
-	server := api.NewServer(cfg, waManager, chatsRepo)
+	server := api.NewServer(cfg, waManager, chatsRepo, fsClient)
 
 	// Handle graceful shutdown
 	go func() {
@@ -77,6 +78,21 @@ func main() {
 		waManager.Close()
 		fmt.Println("✅ Cleanup complete. Goodbye!")
 		os.Exit(0)
+	}()
+
+	// 24-hour scheduler: re-post WA statuses if expired
+	go func() {
+		// Initial delay of 5 minutes to let the bot connect first
+		time.Sleep(5 * time.Minute)
+
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			if server.Handler != nil {
+				server.Handler.SyncWAStatusFromScheduler(context.Background())
+			}
+		}
 	}()
 
 	// Start server

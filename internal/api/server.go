@@ -25,7 +25,7 @@ type Server struct {
 }
 
 // NewServer creates a new HTTP server
-func NewServer(cfg *config.Config, waManager *whatsapp.Manager, repo *firestore.ChatsRepository) *Server {
+func NewServer(cfg *config.Config, waManager *whatsapp.Manager, repo *firestore.ChatsRepository, fsClient *firestore.Client) *Server {
 	// Set Gin mode
 	gin.SetMode(gin.ReleaseMode)
 
@@ -38,6 +38,13 @@ func NewServer(cfg *config.Config, waManager *whatsapp.Manager, repo *firestore.
 
 	// Create handlers
 	handler := handlers.NewHandler(waManager, repo, wsHub)
+
+	// Initialize WA Status repository
+	if fsClient != nil {
+		waStatusRepo := firestore.NewWAStatusRepository(fsClient)
+		handlers.InitWAStatusRepo(waStatusRepo)
+		log.Println("✅ WA Status repository initialized")
+	}
 
 	server := &Server{
 		Config:    cfg,
@@ -97,6 +104,10 @@ func (s *Server) setupRoutes() {
 		protected.POST("/trigger-backup", s.Handler.TriggerBackup)
 		protected.POST("/api/blog/manual-trigger", s.Handler.TriggerBlog)
 		protected.POST("/sync-invoices", s.Handler.SyncInvoices)
+
+		// WhatsApp Status sync endpoints
+		protected.POST("/sync-wa-status", s.Handler.SyncWAStatus)
+		protected.DELETE("/clear-wa-status", s.Handler.ClearWAStatus)
 	}
 }
 
